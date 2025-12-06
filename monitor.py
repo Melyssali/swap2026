@@ -18,22 +18,17 @@ URL = "https://swap.ca/products/canada-ro-nomination-whv"
 PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER_KEY")
 PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN")
 CHECK_TYPE = os.environ.get("CHECK_TYPE", "change")
-
-KEY_PHRASES = [
-    "in December",
-    "2026 RO waitlist",
-    "Sold out",
-    "2025 season is now closed",
-    "Check this webpage for updates",
-]
+STATE_FILE = Path("state.txt")
 
 OPEN_INDICATORS = [
     "waitlist is now open",
     "join the waitlist",
     "register now",
-    "sign up",
+    "sign up", 
     "apply now",
     "spots available",
+    "inscription",
+    "ouvert",
 ]
 
 
@@ -46,26 +41,62 @@ def fetch_page() -> str:
     return response.text
 
 
-def extract_relevant_content(html: str) -> dict:
-    content = {
-        "full_hash": hashlib.md5(html.encode()).hexdigest(),
-        "key_phrases_found": {},
-        "open_indicators_found": [],
-    }
+def extract_stable_content(html: str) -> str:
+    """Extract only the stable parts of the page that matter."""
+    # Get text content
+    text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
+    text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
     
-    text = re.sub(r'<[^>]+>', ' ', html)
-    text = re.sub(r'\s+', ' ', text)
+    # Look for the important section about RO Nomination
+    # Extract key phrases that would change if registration opens
+    important_phrases = []
+    
+    keywords = [
+        "2026 RO waitlist",
+        "2025 season is now closed",
+        "in December",
+        "Sold out",
+        "waitlist",
+        "registration",
+        "inscription",
+        "apply",
+        "join",
+    ]
+    
     text_lower = text.lower()
+    for kw in keywords:
+        if kw.lower() in text_lower:
+            # Find context around keyword
+            idx = text_lower.find(kw.lower())
+            start = max(0, idx - 30)
+            end = min(len(text), idx + len(kw) + 30)
+            important_phrases.append(text[start:end])
     
-    for phrase in KEY_PHRASES:
-        if phrase.lower() in text_lower:
-            content["key_phrases_found"][phrase] = True
+    # Also check for "Add to cart" vs "Sold out" button state
+    if "sold out" in text_lower:
+        important_phrases.append("STATUS:SOLD_OUT")
+    if "add to cart" in text_lower:
+        important_phrases.append("STATUS:AVAILABLE")
     
+    return "|".join(sorted(important_phrases))
+
+
+def get_content_hash(html: str) -> str:
+    """Get hash of only the important content."""
+    stable_content = extract_stable_content(html)
+    return hashlib.md5(stable_content.encode()).hexdigest()
+
+
+def check_open_indicators(html: str) -> list:
+    """Check if any indicators suggest the waitlist is open."""
+    text = re.sub(r'<[^>]+>', ' ', html).lower()
+    found = []
     for indicator in OPEN_INDICATORS:
-        if indicator.lower() in text_lower:
-            content["open_indicators_found"].append(indicator)
-    
-    return content
+        if indicator.lower() in text:
+            found.append(indicator)
+    return found
 
 
 def send_notification(title: str, message: str, priority: int = 1, url: str = None):
@@ -101,15 +132,18 @@ def send_notification(title: str, message: str, priority: int = 1, url: str = No
         print(f"❌ Failed to send notification: {e}")
 
 
-def load_previous_state() -> dict | None:
-    state_file = Path("previous_state.txt")
-    if state_file.exists():
-        return {"hash": state_file.read_text().strip()}
+def load_previous_hash() -> str | None:
+    if STATE_FILE.exists():
+        content = STATE_FILE.read_text().strip()
+        print(f"📂 Loaded previous hash: {content[:20]}...")
+        return content
+    print("📂 No previous state found")
     return None
 
 
-def save_state(content_hash: str):
-    Path("previous_state.txt").write_text(content_hash)
+def save_hash(content_hash: str):
+    STATE_FILE.write_text(content_hash)
+    print(f"💾 Saved hash: {content_hash[:20]}...")
 
 
 def check_for_changes():
@@ -117,22 +151,28 @@ def check_for_changes():
     
     try:
         html = fetch_page()
-        content = extract_relevant_content(html)
-        previous = load_previous_state()
+        current_hash = get_content_hash(html)
+        previous_hash = load_previous_hash()
         
-        if content["open_indicators_found"]:
+        print(f"Current hash: {current_hash}")
+        print(f"Previous hash: {previous_hash}")
+        
+        # Check for open indicators (HIGH PRIORITY)
+        open_indicators = check_open_indicators(html)
+        if "add to cart" in [i.lower() for i in open_indicators] or "apply now" in [i.lower() for i in open_indicators]:
             send_notification(
-                "🚨 SWAP WAITLIST OUVERTE !",
-                f"Indicateurs: {', '.join(content['open_indicators_found'])}\n\nFONCE MAINTENANT !",
+                "🚨 SWAP PEUT-ÊTRE OUVERT !",
+                "Le bouton semble actif !\n\nFONCE MAINTENANT !",
                 priority=2,
                 url=URL,
             )
-            save_state(content["full_hash"])
+            save_hash(current_hash)
             return
         
-        if previous is None:
+        # First run
+        if previous_hash is None:
             print("📝 First run - saving initial state")
-            save_state(content["full_hash"])
+            save_hash(current_hash)
             send_notification(
                 "✅ Monitoring SWAP activé",
                 "Je surveille la page RO Nomination.\nTu recevras une alerte si quelque chose change.",
@@ -140,14 +180,16 @@ def check_for_changes():
             )
             return
         
-        if content["full_hash"] != previous["hash"]:
+        # Compare
+        if current_hash != previous_hash:
+            print("🔔 Change detected!")
             send_notification(
                 "⚠️ CHANGEMENT SUR SWAP !",
                 "La page RO Nomination a été modifiée.\nVérifie maintenant !",
                 priority=1,
                 url=URL,
             )
-            save_state(content["full_hash"])
+            save_hash(current_hash)
         else:
             print("✓ No changes detected")
             
@@ -161,13 +203,17 @@ def send_heartbeat():
     print(f"💓 Sending heartbeat at {datetime.now().isoformat()}")
     try:
         html = fetch_page()
-        content = extract_relevant_content(html)
         
-        if content["open_indicators_found"]:
+        if "add to cart" in html.lower():
             send_notification("🚨 WAITLIST OUVERTE !", "FONCE !", priority=2, url=URL)
             return
         
-        send_notification("💓 Monitoring SWAP OK", "Le monitoring fonctionne.", priority=-1)
+        status = "Sold out" if "sold out" in html.lower() else "Inconnu"
+        send_notification(
+            "💓 Monitoring SWAP OK", 
+            f"Le monitoring fonctionne.\nStatut actuel: {status}",
+            priority=-1,
+        )
     except Exception as e:
         send_notification("❌ Heartbeat échoué", str(e)[:200], priority=1)
 
