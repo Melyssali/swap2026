@@ -10,24 +10,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      
       - run: pip install requests
-      - uses: actions/download-artifact@v4
-        continue-on-error: true
+      
+      - name: Restore state
+        id: cache-state
+        uses: actions/cache/restore@v4
         with:
-          name: swap-state
-          path: .
+          path: state.txt
+          key: swap-state-v1
+          restore-keys: |
+            swap-state-
+      
       - name: Run monitor
         env:
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
           CHECK_TYPE: change
         run: python monitor.py
-      - uses: actions/upload-artifact@v4
+      
+      - name: Delete old cache
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh cache delete swap-state-v1 || true
+      
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
         with:
-          name: swap-state
-          path: previous_state.txt
-          retention-days: 90
-          overwrite: true
+          path: state.txt
+          key: swap-state-v1
