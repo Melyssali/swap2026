@@ -1,1 +1,30 @@
+name: Daily Heartbeat
 
+on:
+  schedule:
+    # 8:00 AM Paris time (7:00 UTC in winter)
+    - cron: '0 7 * * *'
+  
+  workflow_dispatch:
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install requests
+      
+      - name: Send heartbeat
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          CHECK_TYPE: heartbeat
+        run: python monitor.py
