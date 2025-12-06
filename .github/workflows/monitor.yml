@@ -1,1 +1,46 @@
+name: SWAP Monitor
 
+on:
+  schedule:
+    # Check every 5 minutes
+    - cron: '*/5 * * * *'
+  
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install requests
+      
+      - name: Download previous state
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: swap-state
+          path: .
+      
+      - name: Run monitor
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          CHECK_TYPE: change
+        run: python monitor.py
+      
+      - name: Upload state
+        uses: actions/upload-artifact@v4
+        with:
+          name: swap-state
+          path: previous_state.txt
+          retention-days: 90
+          overwrite: true
