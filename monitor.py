@@ -5,6 +5,7 @@ Checks for changes and sends notifications via Pushover
 """
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -31,7 +32,7 @@ def fetch_page() -> str:
 
 
 def extract_stable_content(html: str) -> str:
-    """Extract all text content from the page."""
+    """Extract all text content from the page, filtering dynamic elements."""
     text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
     text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
     text = re.sub(r'<[^>]+>', ' ', text)
@@ -39,10 +40,31 @@ def extract_stable_content(html: str) -> str:
     return text
 
 
-def get_content_hash(html: str) -> str:
-    """Get hash of the page content."""
-    stable_content = extract_stable_content(html)
-    return hashlib.md5(stable_content.encode()).hexdigest()
+def get_content_hash(text: str) -> str:
+    """Get hash of the text content."""
+    return hashlib.md5(text.encode()).hexdigest()
+
+
+def find_differences(old_text: str, new_text: str) -> str:
+    """Find what's different between old and new text."""
+    old_words = set(old_text.lower().split())
+    new_words = set(new_text.lower().split())
+    
+    added = new_words - old_words
+    removed = old_words - new_words
+    
+    diff_parts = []
+    if added:
+        added_sample = list(added)[:10]
+        diff_parts.append(f"Nouveaux mots: {', '.join(added_sample)}")
+    if removed:
+        removed_sample = list(removed)[:10]
+        diff_parts.append(f"Mots retirés: {', '.join(removed_sample)}")
+    
+    if not diff_parts:
+        return "Changement de structure/ordre détecté"
+    
+    return "\n".join(diff_parts)
 
 
 def send_notification(title: str, message: str, priority: int = 1, url: str = None):
@@ -55,7 +77,7 @@ def send_notification(title: str, message: str, priority: int = 1, url: str = No
             "token": PUSHOVER_API_TOKEN,
             "user": PUSHOVER_USER_KEY,
             "title": title,
-            "message": message,
+            "message": message[:1000],
             "priority": priority,
         }
         
@@ -78,18 +100,28 @@ def send_notification(title: str, message: str, priority: int = 1, url: str = No
         print(f"❌ Failed to send notification: {e}")
 
 
-def load_previous_hash() -> str | None:
+def load_previous_state() -> dict | None:
     if STATE_FILE.exists():
-        content = STATE_FILE.read_text().strip()
-        print(f"📂 Loaded previous hash: {content[:20]}...")
-        return content
+        try:
+            data = json.loads(STATE_FILE.read_text())
+            if isinstance(data, str):
+                # ancien format : juste le hash
+                return {"hash": data, "text": ""}
+            print("📂 Loaded previous state")
+            return data
+        except Exception:
+            return None
     print("📂 No previous state found")
     return None
 
 
-def save_hash(content_hash: str):
-    STATE_FILE.write_text(content_hash)
-    print(f"💾 Saved hash: {content_hash[:20]}...")
+def save_state(content_hash: str, text: str):
+    data = {
+        "hash": content_hash,
+        "text": text[:50000]
+    }
+    STATE_FILE.write_text(json.dumps(data))
+    print(f"💾 Saved state")
 
 
 def check_for_changes():
@@ -97,28 +129,29 @@ def check_for_changes():
     
     try:
         html = fetch_page()
-        current_hash = get_content_hash(html)
-        previous_hash = load_previous_hash()
+        text = extract_stable_content(html)
+        current_hash = get_content_hash(text)
+        previous = load_previous_state()
         text_lower = html.lower()
         
         print(f"Current hash: {current_hash}")
-        print(f"Previous hash: {previous_hash}")
+        print(f"Previous hash: {previous['hash'] if previous else 'None'}")
         
         # HIGH PRIORITY: Check if "Add to cart" appears (waitlist open!)
         if "add to cart" in text_lower:
             send_notification(
                 "🚨 SWAP PEUT-ÊTRE OUVERT !",
-                "Le bouton semble actif !\n\nFONCE MAINTENANT !",
+                "Le bouton 'Add to cart' est apparu !\n\nFONCE MAINTENANT !",
                 priority=2,
                 url=URL,
             )
-            save_hash(current_hash)
+            save_state(current_hash, text)
             return
         
         # First run
-        if previous_hash is None:
+        if previous is None:
             print("📝 First run - saving initial state")
-            save_hash(current_hash)
+            save_state(current_hash, text)
             send_notification(
                 "✅ Monitoring SWAP activé",
                 "Je surveille la page RO Nomination.\nTu recevras une alerte si quelque chose change.",
@@ -127,15 +160,18 @@ def check_for_changes():
             return
         
         # Compare
-        if current_hash != previous_hash:
+        if current_hash != previous["hash"]:
             print("🔔 Change detected!")
+            
+            diff = find_differences(previous.get("text", ""), text)
+            
             send_notification(
                 "⚠️ CHANGEMENT SUR SWAP !",
-                "La page RO Nomination a été modifiée.\nVérifie maintenant !",
+                f"La page a été modifiée.\n\n{diff}",
                 priority=1,
                 url=URL,
             )
-            save_hash(current_hash)
+            save_state(current_hash, text)
         else:
             print("✓ No changes detected")
             
