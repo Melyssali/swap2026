@@ -17,15 +17,6 @@ jobs:
       
       - run: pip install requests
       
-      - name: Restore state
-        id: cache-state
-        uses: actions/cache/restore@v4
-        with:
-          path: state.txt
-          key: swap-state-v1
-          restore-keys: |
-            swap-state-
-      
       - name: Run monitor
         env:
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
@@ -33,17 +24,10 @@ jobs:
           CHECK_TYPE: change
         run: python monitor.py
       
-      - name: Delete old cache
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Commit state
         run: |
-          gh cache delete swap-state-v1 || true
-      
-      - name: Save state
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: state.txt
-          key: swap-state-v1
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add state.txt || true
+          git diff --staged --quiet || git commit -m "Update state"
+          git push || true
