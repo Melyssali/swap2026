@@ -20,17 +20,6 @@ PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN")
 CHECK_TYPE = os.environ.get("CHECK_TYPE", "change")
 STATE_FILE = Path("state.txt")
 
-OPEN_INDICATORS = [
-    "waitlist is now open",
-    "join the waitlist",
-    "register now",
-    "sign up", 
-    "apply now",
-    "spots available",
-    "inscription",
-    "ouvert",
-]
-
 
 def fetch_page() -> str:
     headers = {
@@ -42,61 +31,18 @@ def fetch_page() -> str:
 
 
 def extract_stable_content(html: str) -> str:
-    """Extract only the stable parts of the page that matter."""
-    # Get text content
+    """Extract all text content from the page."""
     text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
     text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
     text = re.sub(r'<[^>]+>', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
-    
-    # Look for the important section about RO Nomination
-    # Extract key phrases that would change if registration opens
-    important_phrases = []
-    
-    keywords = [
-        "2026 RO waitlist",
-        "2025 season is now closed",
-        "in December",
-        "Sold out",
-        "waitlist",
-        "registration",
-        "inscription",
-        "apply",
-        "join",
-    ]
-    
-    text_lower = text.lower()
-    for kw in keywords:
-        if kw.lower() in text_lower:
-            # Find context around keyword
-            idx = text_lower.find(kw.lower())
-            start = max(0, idx - 30)
-            end = min(len(text), idx + len(kw) + 30)
-            important_phrases.append(text[start:end])
-    
-    # Also check for "Add to cart" vs "Sold out" button state
-    if "sold out" in text_lower:
-        important_phrases.append("STATUS:SOLD_OUT")
-    if "add to cart" in text_lower:
-        important_phrases.append("STATUS:AVAILABLE")
-    
-    return "|".join(sorted(important_phrases))
+    return text
 
 
 def get_content_hash(html: str) -> str:
-    """Get hash of only the important content."""
+    """Get hash of the page content."""
     stable_content = extract_stable_content(html)
     return hashlib.md5(stable_content.encode()).hexdigest()
-
-
-def check_open_indicators(html: str) -> list:
-    """Check if any indicators suggest the waitlist is open."""
-    text = re.sub(r'<[^>]+>', ' ', html).lower()
-    found = []
-    for indicator in OPEN_INDICATORS:
-        if indicator.lower() in text:
-            found.append(indicator)
-    return found
 
 
 def send_notification(title: str, message: str, priority: int = 1, url: str = None):
@@ -153,13 +99,13 @@ def check_for_changes():
         html = fetch_page()
         current_hash = get_content_hash(html)
         previous_hash = load_previous_hash()
+        text_lower = html.lower()
         
         print(f"Current hash: {current_hash}")
         print(f"Previous hash: {previous_hash}")
         
-        # Check for open indicators (HIGH PRIORITY)
-        open_indicators = check_open_indicators(html)
-        if "add to cart" in [i.lower() for i in open_indicators] or "apply now" in [i.lower() for i in open_indicators]:
+        # HIGH PRIORITY: Check if "Add to cart" appears (waitlist open!)
+        if "add to cart" in text_lower:
             send_notification(
                 "🚨 SWAP PEUT-ÊTRE OUVERT !",
                 "Le bouton semble actif !\n\nFONCE MAINTENANT !",
