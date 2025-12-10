@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SWAP Canada RO Nomination Page Monitor
+Multi-page Monitor for Canadian Visa
 Checks for changes and sends notifications via Pushover
 """
 
@@ -15,24 +15,34 @@ from pathlib import Path
 import requests
 
 # Configuration
-URL = "https://swap.ca/products/canada-ro-nomination-whv"
+PAGES = {
+    "IEC Programs": {
+        "url": "https://internship-network.org/iec-programs/",
+        "state_file": "state_iec.txt",
+        "urgent_keyword": "register now",
+    },
+    "Internship Network": {
+        "url": "https://internship-network.org",
+        "state_file": "state_internship.txt",
+        "urgent_keyword": "register now",
+    },
+}
+
 PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER_KEY")
 PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN")
 CHECK_TYPE = os.environ.get("CHECK_TYPE", "change")
-STATE_FILE = Path("state.txt")
 
 
-def fetch_page() -> str:
+def fetch_page(url: str) -> str:
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
     }
-    response = requests.get(URL, headers=headers, timeout=30)
+    response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()
     return response.text
 
 
 def extract_stable_content(html: str) -> str:
-    """Extract all text content from the page, filtering dynamic elements."""
     text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
     text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
     text = re.sub(r'<[^>]+>', ' ', text)
@@ -41,12 +51,10 @@ def extract_stable_content(html: str) -> str:
 
 
 def get_content_hash(text: str) -> str:
-    """Get hash of the text content."""
     return hashlib.md5(text.encode()).hexdigest()
 
 
 def find_differences(old_text: str, new_text: str) -> str:
-    """Find what's different between old and new text."""
     old_words = set(old_text.lower().split())
     new_words = set(new_text.lower().split())
     
@@ -83,7 +91,7 @@ def send_notification(title: str, message: str, priority: int = 1, url: str = No
         
         if url:
             data["url"] = url
-            data["url_title"] = "Ouvrir SWAP"
+            data["url_title"] = "Ouvrir le site"
         
         if priority == 2:
             data["retry"] = 60
@@ -100,104 +108,120 @@ def send_notification(title: str, message: str, priority: int = 1, url: str = No
         print(f"❌ Failed to send notification: {e}")
 
 
-def load_previous_state() -> dict | None:
-    if STATE_FILE.exists():
+def load_previous_state(state_file: str) -> dict | None:
+    path = Path(state_file)
+    if path.exists():
         try:
-            data = json.loads(STATE_FILE.read_text())
+            content = path.read_text().strip()
+            if not content:
+                return None
+            data = json.loads(content)
             if isinstance(data, str):
-                # ancien format : juste le hash
                 return {"hash": data, "text": ""}
-            print("📂 Loaded previous state")
             return data
         except Exception:
             return None
-    print("📂 No previous state found")
     return None
 
 
-def save_state(content_hash: str, text: str):
+def save_state(state_file: str, content_hash: str, text: str):
     data = {
         "hash": content_hash,
         "text": text[:50000]
     }
-    STATE_FILE.write_text(json.dumps(data))
-    print(f"💾 Saved state")
+    Path(state_file).write_text(json.dumps(data))
+    print(f"💾 Saved state to {state_file}")
 
 
-def check_for_changes():
-    print(f"🔍 Checking SWAP page at {datetime.now().isoformat()}")
+def check_page(name: str, config: dict):
+    url = config["url"]
+    state_file = config["state_file"]
+    urgent_keyword = config["urgent_keyword"]
+    
+    print(f"\n🔍 Checking {name}: {url}")
     
     try:
-        html = fetch_page()
+        html = fetch_page(url)
         text = extract_stable_content(html)
         current_hash = get_content_hash(text)
-        previous = load_previous_state()
+        previous = load_previous_state(state_file)
         text_lower = html.lower()
         
         print(f"Current hash: {current_hash}")
         print(f"Previous hash: {previous['hash'] if previous else 'None'}")
         
-        # HIGH PRIORITY: Check if "Add to cart" appears (waitlist open!)
-        if "add to cart" in text_lower:
+        # HIGH PRIORITY: Check for urgent keyword
+        if urgent_keyword and urgent_keyword in text_lower:
             send_notification(
-                "🚨 SWAP PEUT-ÊTRE OUVERT !",
-                "Le bouton 'Add to cart' est apparu !\n\nFONCE MAINTENANT !",
+                f"🚨 {name} - PEUT-ÊTRE OUVERT !",
+                f"'{urgent_keyword}' détecté !\n\nFONCE MAINTENANT !",
                 priority=2,
-                url=URL,
+                url=url,
             )
-            save_state(current_hash, text)
+            save_state(state_file, current_hash, text)
             return
         
         # First run
         if previous is None:
-            print("📝 First run - saving initial state")
-            save_state(current_hash, text)
+            print(f"📝 First run for {name} - saving initial state")
+            save_state(state_file, current_hash, text)
             send_notification(
-                "✅ Monitoring SWAP activé",
-                "Je surveille la page RO Nomination.\nTu recevras une alerte si quelque chose change.",
+                f"✅ Monitoring {name} activé",
+                f"Je surveille cette page.\nTu recevras une alerte si quelque chose change.",
                 priority=0,
             )
             return
         
         # Compare
         if current_hash != previous["hash"]:
-            print("🔔 Change detected!")
-            
+            print(f"🔔 Change detected on {name}!")
             diff = find_differences(previous.get("text", ""), text)
-            
             send_notification(
-                "⚠️ CHANGEMENT SUR SWAP !",
+                f"⚠️ CHANGEMENT sur {name} !",
                 f"La page a été modifiée.\n\n{diff}",
                 priority=1,
-                url=URL,
+                url=url,
             )
-            save_state(current_hash, text)
+            save_state(state_file, current_hash, text)
         else:
-            print("✓ No changes detected")
+            print(f"✓ No changes on {name}")
             
     except Exception as e:
-        print(f"❌ Error: {e}")
-        send_notification("❌ Erreur monitoring SWAP", str(e)[:200], priority=1)
-        sys.exit(1)
+        print(f"❌ Error checking {name}: {e}")
+        send_notification(f"❌ Erreur monitoring {name}", str(e)[:200], priority=1)
+
+
+def check_for_changes():
+    print(f"🔍 Starting checks at {datetime.now().isoformat()}")
+    
+    for name, config in PAGES.items():
+        try:
+            check_page(name, config)
+        except Exception as e:
+            print(f"❌ Error with {name}: {e}")
+            continue
 
 
 def send_heartbeat():
     print(f"💓 Sending heartbeat at {datetime.now().isoformat()}")
-    try:
-        html = fetch_page()
-        
-        if "add to cart" in html.lower():
-            send_notification("🚨 WAITLIST OUVERTE !", "FONCE !", priority=2, url=URL)
-            return
-        
-        status = "Sold out" if "sold out" in html.lower() else "Inconnu"
-        send_notification(
-            "💓 Monitoring SWAP OK", 
-            f"Le monitoring fonctionne.\nStatut actuel: {status}",
-            priority=-1,
-        )
-    except Exception as e:
-        send_notification("❌ Heartbeat échoué", str(e)[:200], priority=1)
+    
+    statuses = []
+    for name, config in PAGES.items():
+        try:
+            html = fetch_page(config["url"])
+            if "register now" in html.lower():
+                send_notification(f"🚨 {name} OUVERT !", "FONCE !", priority=2, url=config["url"])
+                statuses.append(f"• {name}: ⚠️ OUVERT?")
+            else:
+                statuses.append(f"• {name}: OK")
+        except Exception as e:
+            statuses.append(f"• {name}: ❌ Erreur")
+    
+    send_notification(
+        "💓 Monitoring OK",
+        f"Le monitoring fonctionne.\n\n" + "\n".join(statuses),
+        priority=-1,
+    )
 
 
 if __name__ == "__main__":
