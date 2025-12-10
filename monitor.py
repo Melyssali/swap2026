@@ -26,6 +26,11 @@ PAGES = {
         "state_file": "state_internship.txt",
         "urgent_keyword": "register now",
     },
+    "Jenza": {
+        "url": "https://jenza.com/experiences/working-holidays/work-canada-ro/",
+        "state_file": "state_jenza.txt",
+        "urgent_keyword": "apply now",
+    },
 }
 
 PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER_KEY")
@@ -209,7 +214,7 @@ def send_heartbeat():
     for name, config in PAGES.items():
         try:
             html = fetch_page(config["url"])
-            if "register now" in html.lower():
+            if "register now" in html.lower() or "apply now" in html.lower():
                 send_notification(f"🚨 {name} OUVERT !", "FONCE !", priority=2, url=config["url"])
                 statuses.append(f"• {name}: ⚠️ OUVERT?")
             else:
