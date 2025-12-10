@@ -31,6 +31,6 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add state_iec.txt state_internship.txt || true
+          git add state_iec.txt state_internship.txt state_jenza.txt || true
           git diff --staged --quiet || git commit -m "Update state"
           git push || true
