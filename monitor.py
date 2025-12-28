@@ -20,16 +20,19 @@ PAGES = {
         "url": "https://internship-network.org/iec-programs/",
         "state_file": "state_iec.txt",
         "urgent_keyword": "register now",
+        "filter_keywords": ["2025", "2026", "season", "closed", "open", "december", "january", "application", "update", "iec", "working holiday", "check back"],
     },
     "Internship Network": {
         "url": "https://internship-network.org",
         "state_file": "state_internship.txt",
         "urgent_keyword": "register now",
+        "filter_keywords": ["2025", "2026", "season", "closed", "open", "december", "january", "application", "update", "iec", "working holiday", "check back"],
     },
     "Jenza": {
         "url": "https://jenza.com/experiences/working-holidays/work-canada-ro/",
         "state_file": "state_jenza.txt",
         "urgent_keyword": "apply now",
+        "filter_keywords": None,
     },
 }
 
@@ -47,11 +50,22 @@ def fetch_page(url: str) -> str:
     return response.text
 
 
-def extract_stable_content(html: str) -> str:
+def extract_stable_content(html: str, filter_keywords: list = None) -> str:
     text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
     text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
     text = re.sub(r'<[^>]+>', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
+    
+    # If filter_keywords provided, only keep sentences containing those keywords
+    if filter_keywords:
+        sentences = re.split(r'[.!?]', text)
+        relevant = []
+        for sentence in sentences:
+            sentence_lower = sentence.lower()
+            if any(kw.lower() in sentence_lower for kw in filter_keywords):
+                relevant.append(sentence.strip())
+        text = " | ".join(relevant)
+    
     return text
 
 
@@ -142,95 +156,10 @@ def check_page(name: str, config: dict):
     url = config["url"]
     state_file = config["state_file"]
     urgent_keyword = config["urgent_keyword"]
+    filter_keywords = config.get("filter_keywords")
     
     print(f"\n🔍 Checking {name}: {url}")
     
     try:
         html = fetch_page(url)
-        text = extract_stable_content(html)
-        current_hash = get_content_hash(text)
-        previous = load_previous_state(state_file)
-        text_lower = html.lower()
-        
-        print(f"Current hash: {current_hash}")
-        print(f"Previous hash: {previous['hash'] if previous else 'None'}")
-        
-        # HIGH PRIORITY: Check for urgent keyword
-        if urgent_keyword and urgent_keyword in text_lower:
-            send_notification(
-                f"🚨 {name} - PEUT-ÊTRE OUVERT !",
-                f"'{urgent_keyword}' détecté !\n\nFONCE MAINTENANT !",
-                priority=2,
-                url=url,
-            )
-            save_state(state_file, current_hash, text)
-            return
-        
-        # First run
-        if previous is None:
-            print(f"📝 First run for {name} - saving initial state")
-            save_state(state_file, current_hash, text)
-            send_notification(
-                f"✅ Monitoring {name} activé",
-                f"Je surveille cette page.\nTu recevras une alerte si quelque chose change.",
-                priority=0,
-            )
-            return
-        
-        # Compare
-        if current_hash != previous["hash"]:
-            print(f"🔔 Change detected on {name}!")
-            diff = find_differences(previous.get("text", ""), text)
-            send_notification(
-                f"⚠️ CHANGEMENT sur {name} !",
-                f"La page a été modifiée.\n\n{diff}",
-                priority=1,
-                url=url,
-            )
-            save_state(state_file, current_hash, text)
-        else:
-            print(f"✓ No changes on {name}")
-            
-    except Exception as e:
-        print(f"❌ Error checking {name}: {e}")
-        send_notification(f"❌ Erreur monitoring {name}", str(e)[:200], priority=1)
-
-
-def check_for_changes():
-    print(f"🔍 Starting checks at {datetime.now().isoformat()}")
-    
-    for name, config in PAGES.items():
-        try:
-            check_page(name, config)
-        except Exception as e:
-            print(f"❌ Error with {name}: {e}")
-            continue
-
-
-def send_heartbeat():
-    print(f"💓 Sending heartbeat at {datetime.now().isoformat()}")
-    
-    statuses = []
-    for name, config in PAGES.items():
-        try:
-            html = fetch_page(config["url"])
-            if "register now" in html.lower() or "apply now" in html.lower():
-                send_notification(f"🚨 {name} OUVERT !", "FONCE !", priority=2, url=config["url"])
-                statuses.append(f"• {name}: ⚠️ OUVERT?")
-            else:
-                statuses.append(f"• {name}: OK")
-        except Exception as e:
-            statuses.append(f"• {name}: ❌ Erreur")
-    
-    send_notification(
-        "💓 Monitoring OK",
-        f"Le monitoring fonctionne.\n\n" + "\n".join(statuses),
-        priority=-1,
-    )
-
-
-if __name__ == "__main__":
-    if CHECK_TYPE == "heartbeat":
-        send_heartbeat()
-    else:
-        check_for_changes()
+        text = extract_stable_content(html, filter_keywords)
