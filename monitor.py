@@ -14,21 +14,9 @@ from pathlib import Path
 import requests
 
 PAGES = {
-    "IEC Programs": {
-        "url": "https://internship-network.org/iec-programs/",
-        "state_file": "state_iec.txt",
-    },
-    "Internship Network": {
-        "url": "https://internship-network.org",
-        "state_file": "state_internship.txt",
-    },
     "Jenza": {
         "url": "https://jenza.com/experiences/working-holidays/work-canada-ro/",
         "state_file": "state_jenza.txt",
-    },
-    "Go International": {
-        "url": "https://gointernational.ca/canada-working-holiday-program-ro-sponsored",
-        "state_file": "state_gointernational.txt",
     },
 }
 
